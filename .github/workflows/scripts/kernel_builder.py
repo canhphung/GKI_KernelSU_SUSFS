@@ -212,8 +212,8 @@ CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
         self._chdir(self.work_dir)
         formatted_branch = self.config.formatted_branch
 
-        self._run_cmd(f"$REPO init --depth=1 --u https://android.googlesource.com/kernel/manifest "
-                     f"-b common-{formatted_branch} --repo-rev=v2.16", check=False)
+        self._run_cmd(f"$REPO init --depth=1 -u https://android.googlesource.com/kernel/manifest "
+                     f"-b common-{formatted_branch} --repo-rev=v2.16")
 
         remote = subprocess.run(f"git ls-remote https://android.googlesource.com/kernel/common {formatted_branch}",
                                shell=True, capture_output=True, text=True).stdout.strip()
@@ -227,7 +227,7 @@ CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
 
         self.env["REMOTE_BRANCH"] = remote
         logger.info("同步内核源代码...")
-        self._run_cmd("$REPO --trace sync -c -j$(nproc --all) --no-tags --fail-fast", check=False)
+        self._run_cmd("$REPO --trace sync -c -j$(nproc --all) --no-tags --fail-fast")
 
         common_dir = self.work_dir / "common"
         if not common_dir.exists():
