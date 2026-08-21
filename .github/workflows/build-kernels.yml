@@ -74,7 +74,8 @@ jobs:
           test -f "$source_file"
           mkdir -p release
           cp "$source_file" "release/${ARTIFACT_NAME}"
-          sha256sum "release/${ARTIFACT_NAME}" | tee release/SHA256SUMS.txt
+          cd release
+          sha256sum "${ARTIFACT_NAME}" | tee SHA256SUMS.txt
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v7
