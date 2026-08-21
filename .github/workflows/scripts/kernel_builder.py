@@ -380,6 +380,16 @@ CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
         fb = f"{self.config.android_version}-{self.config.kernel_version}"
         with open(task_mmu, "r") as f:
             content = f.read()
+        modified = False
+
+        # The SukiSU hide patch only assigns dentry on the spoofed-name path,
+        # while the SUSFS changes may read it unconditionally afterwards.
+        # Initialize it so Clang's -Werror=sometimes-uninitialized is satisfied.
+        if "struct dentry *dentry;" in content:
+            content = content.replace(
+                "struct dentry *dentry;", "struct dentry *dentry = NULL;", 1
+            )
+            modified = True
 
         if fb == "android15-6.6" and "unsigned int nr_subpages" not in content:
             self._fix_base_c_header()
@@ -387,13 +397,15 @@ CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
             self._fix_base_c_header()
             if "goto show_pad;" in content:
                 content = content.replace("goto show_pad;", "return 0;")
-                with open(task_mmu, "w") as f:
-                    f.write(content)
+                modified = True
         elif fb in ["android12-5.10", "android13-5.10", "android13-5.15"] and "if (!vma_pages(vma))" not in content:
             if "goto show_pad;" in content:
                 content = content.replace("goto show_pad;", "return 0;")
-                with open(task_mmu, "w") as f:
-                    f.write(content)
+                modified = True
+
+        if modified:
+            with open(task_mmu, "w") as f:
+                f.write(content)
 
     def _fix_base_c_header(self):
         base_c = self.work_dir / "common/fs/proc/base.c"
