@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 
 from config import (BuildConfig, KSU_REPO_CONFIG, SUSFS_REPO_CONFIG, SUKISU_PATCH_REPO_CONFIG,
                    ANYKERNEL_CONFIG, KERNEL_PATCHES_CONFIG, BBG_CONFIG, TOOLCHAIN_CONFIG,
-                   LEGACY_FIXES, OP8E_PATCH_URL, KPM_PATCH_URL)
+                   DROIDSPACES_CONFIG, LEGACY_FIXES, OP8E_PATCH_URL, KPM_PATCH_URL)
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -58,6 +58,26 @@ class ShellCommand:
 
 
 class KernelBuilder:
+    DROIDSPACES_TARGET = ("android13", "5.15", "178", "2025-03")
+    DROIDSPACES_GKI_CONFIGS = (
+        "CONFIG_SYSVIPC",
+        "CONFIG_POSIX_MQUEUE",
+        "CONFIG_IPC_NS",
+        "CONFIG_PID_NS",
+        "CONFIG_DEVTMPFS",
+        "CONFIG_NETFILTER_XT_MATCH_ADDRTYPE",
+        "CONFIG_USER_NS",
+        "CONFIG_NETFILTER_XT_TARGET_REJECT",
+        "CONFIG_NETFILTER_XT_TARGET_LOG",
+        "CONFIG_NETFILTER_XT_MATCH_RECENT",
+        "CONFIG_IP_SET",
+        "CONFIG_IP_SET_HASH_IP",
+        "CONFIG_IP_SET_HASH_NET",
+        "CONFIG_NETFILTER_XT_SET",
+        "CONFIG_TMPFS_POSIX_ACL",
+        "CONFIG_TMPFS_XATTR",
+    )
+
     KERNEL_CONFIG_TEMPLATE = """
 # === KernelSU Config ===
 CONFIG_KSU=y
@@ -308,6 +328,29 @@ CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
         if hooks_patch.exists():
             self._run_cmd(f"cp {hooks_patch} . && patch -p1 -F 3 < 69_hide_stuff.patch", check=False)
 
+    def apply_droidspaces_kabi_patch(self):
+        """Apply the mandatory SYSVIPC kABI fix for the pinned GKI 5.15 target."""
+        target = (
+            self.config.android_version,
+            self.config.kernel_version,
+            self.config.sub_level,
+            self.config.os_patch_level,
+        )
+        if target != self.DROIDSPACES_TARGET:
+            raise RuntimeError("This fork only supports android13-5.15.178-2025-03")
+
+        logger.info("=== Applying Droidspaces SYSVIPC kABI patch ===")
+        common_dir = self.work_dir / "common"
+        patch_file = self.work_dir / "droidspaces-sysvipc-kabi.patch"
+        patch_url = (
+            f"{DROIDSPACES_CONFIG['repo_url']}/raw/"
+            f"{DROIDSPACES_CONFIG['commit']}/{DROIDSPACES_CONFIG['sysvipc_patch']}"
+        )
+        self._chdir(common_dir)
+        self._run_cmd(f"curl -fLSs {patch_url} -o {patch_file}")
+        self._run_cmd(f"patch -p1 --forward < {patch_file}")
+        self._chdir(self.work_dir)
+
     def apply_zram_patches(self):
         if not self.config.use_zram:
             return
@@ -394,6 +437,32 @@ CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
             content = content.replace("check_defconfig", "")
             with open(build_config, "w") as f:
                 f.write(content)
+
+    def configure_droidspaces(self):
+        """Enable each upstream-recommended GKI option without duplicate entries."""
+        logger.info("=== Configuring Droidspaces GKI support ===")
+        config_file = self.work_dir / "common/arch/arm64/configs/gki_defconfig"
+        if not config_file.exists():
+            raise RuntimeError(f"Kernel config does not exist: {config_file}")
+
+        with open(config_file, "r") as f:
+            lines = f.readlines()
+
+        for option in self.DROIDSPACES_GKI_CONFIGS:
+            enabled = f"{option}=y\n"
+            option_pattern = re.compile(
+                rf"^(?:{re.escape(option)}=.*|# {re.escape(option)} is not set)\s*$"
+            )
+            matches = [i for i, line in enumerate(lines) if option_pattern.match(line)]
+            if matches:
+                lines[matches[0]] = enabled
+                for duplicate in reversed(matches[1:]):
+                    del lines[duplicate]
+            else:
+                lines.append(enabled)
+
+        with open(config_file, "w") as f:
+            f.writelines(lines)
 
     def _configure_zram(self):
         config_file = self.work_dir / "common/arch/arm64/configs/gki_defconfig"
@@ -673,19 +742,30 @@ CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
         artifacts = []
         ak3_dir = self.anykernel_dir
 
-        for suffix in ["", "-lz4", "-gz"]:
+        for suffix in [""]:
             image_file = f"Image{suffix}"
             image_path = self.work_dir / image_file
             if not image_path.exists():
                 continue
             zip_name = f"{self.config.android_version}-{self.config.kernel_version}.{self.config.sub_level}-{self.config.os_patch_level}-AnyKernel3{suffix}.zip"
+            zip_path = self.work_dir / zip_name
             self._run_cmd(f"cp {image_path} {ak3_dir}/", check=False)
             self._chdir(ak3_dir)
-            self._run_cmd(f"zip -r ../{zip_name} ./*", check=False)
+            self._run_cmd(f"zip -r {zip_path} ./*")
             self._run_cmd(f"rm {ak3_dir}/{image_file}", check=False)
-            artifacts.append(str(self.work_dir / zip_name))
+            artifacts.append(str(zip_path))
             self._chdir(self.work_dir)
         return artifacts
+
+    def prepare_anykernel_image(self):
+        """Copy only the raw Image needed by AnyKernel3; do not create boot images."""
+        if self.config.android_version in ["android12", "android13"]:
+            image_source = self.work_dir / f"out/{self.config.android_version}-{self.config.kernel_version}/dist/Image"
+        else:
+            image_source = self.work_dir / "bazel-bin/common/kernel_aarch64/Image"
+        if not image_source.exists():
+            raise RuntimeError(f"Built kernel Image does not exist: {image_source}")
+        self._run_cmd(f"cp {image_source} {self.work_dir / 'Image'}")
 
     def build(self) -> BuildResult:
         import time
@@ -696,7 +776,6 @@ CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
 
         try:
             self.clone_repositories()
-            self.clone_toolchain()
             self.setup_repo_tool()
             self.init_and_sync_kernel()
             self.add_kernel_supatch()
@@ -704,9 +783,11 @@ CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
             self.add_bbg()
             self.apply_susfs_patches()
             self.apply_sukisu_patches()
+            self.apply_droidspaces_kabi_patch()
             self.apply_zram_patches()
             self.apply_task_mmu_fixes()
             self.configure_kernel()
+            self.configure_droidspaces()
             self.configure_kernel_name()
             self.show_kernel_config()
 
@@ -714,9 +795,8 @@ CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
                 return BuildResult(success=False, config=self.config, message="内核编译失败", build_time=time.time() - start_time)
 
             self.patch_kpm_image()
-            artifacts = []
-            artifacts.extend(self.prepare_boot_images())
-            artifacts.extend(self.create_anykernel_zips())
+            self.prepare_anykernel_image()
+            artifacts = self.create_anykernel_zips()
 
             build_time = time.time() - start_time
             logger.info(f"构建成功! 耗时: {build_time:.2f} 秒, 生成 {len(artifacts)} 个产物")

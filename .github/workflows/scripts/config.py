@@ -80,6 +80,17 @@ ANYKERNEL_CONFIG = {"repo_url": "https://github.com/WildPlusKernel/AnyKernel3.gi
 # Kernel Patches 仓库配置
 KERNEL_PATCHES_CONFIG = {"repo_url": "https://github.com/Tools-cx-app/kernel_patches.git"}
 
+# Droidspaces kernel support. Pin the upstream revision so a future documentation
+# or patch update cannot silently change an otherwise identical kernel build.
+DROIDSPACES_CONFIG = {
+    "repo_url": "https://github.com/ravindu644/Droidspaces-OSS",
+    "commit": "3736fd4fb021e309d50d949cb62e82fcfafd4de7",
+    "sysvipc_patch": (
+        "Documentation/resources/kernel-patches/GKI/below-kernel-6.12/"
+        "001.GKI-below-6.12-fix_sysvipc_kabi_6_7_8.patch"
+    ),
+}
+
 # Baseband-guard 配置
 BBG_CONFIG = {"repo_url": "https://github.com/vc-teahouse/Baseband-guard.git",
               "setup_script": "https://github.com/vc-teahouse/Baseband-guard/raw/main/setup.sh"}
